@@ -74,6 +74,13 @@ $ModelShort        = [string](Get-Cfg 'model_tier.short' 'haiku')
 $ModelMedium       = [string](Get-Cfg 'model_tier.medium' 'sonnet')
 $ModelLong         = [string](Get-Cfg 'model_tier.long' 'opus')
 
+$LlmBackend        = [string](Get-Cfg 'llm_backend' 'claude')
+$GeminiApiKey      = [string](Get-Cfg 'gemini_api_key' '')
+$GeminiModel       = [string](Get-Cfg 'gemini_model' 'gemini-2.0-flash')
+$OpenAIApiKey      = [string](Get-Cfg 'openai_api_key' '')
+$OpenAIModel       = [string](Get-Cfg 'openai_model' 'gpt-4o-mini')
+$OpenAIBaseUrl     = [string](Get-Cfg 'openai_base_url' 'https://api.openai.com/v1')
+
 $ChunkThresholdChars = [int](Get-Cfg 'chunk_threshold_chars' 600000)
 $ChunkSizeChars      = [int](Get-Cfg 'chunk_size_chars' 200000)
 
@@ -308,14 +315,48 @@ function Get-EstimatedTokens($text) {
     return [int]($text.Length / 4)
 }
 
-# ----- Claude -----
+# ----- LLM (Claude / Gemini) -----
+function Invoke-GeminiRequest {
+    param([string]$FullPrompt)
+    if (-not $script:GeminiApiKey) { throw 'gemini_api_key ไม่ได้ตั้งใน config' }
+    $body = @{
+        contents = @(@{ parts = @(@{ text = $FullPrompt }) })
+    } | ConvertTo-Json -Depth 10 -Compress
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/$($script:GeminiModel):generateContent?key=$($script:GeminiApiKey)"
+    $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body -ContentType 'application/json; charset=utf-8'
+    $text = $resp.candidates[0].content.parts[0].text
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'Gemini คืนค่าว่างเปล่า' }
+    return $text
+}
+
+function Invoke-OpenAIRequest {
+    param([string]$FullPrompt)
+    if (-not $script:OpenAIApiKey) { throw 'openai_api_key ไม่ได้ตั้งใน config' }
+    $body = @{
+        model    = $script:OpenAIModel
+        messages = @(@{ role = 'user'; content = $FullPrompt })
+    } | ConvertTo-Json -Depth 5 -Compress
+    $headers = @{ Authorization = "Bearer $($script:OpenAIApiKey)" }
+    $resp = Invoke-RestMethod -Uri "$($script:OpenAIBaseUrl)/chat/completions" -Method POST -Body $body -ContentType 'application/json; charset=utf-8' -Headers $headers
+    $text = $resp.choices[0].message.content
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'OpenAI คืนค่าว่างเปล่า' }
+    return $text
+}
+
+function Invoke-LLM {
+    param([string]$FullPrompt, [string]$Model)
+    if ($script:LlmBackend -eq 'gemini') { return Invoke-GeminiRequest -FullPrompt $FullPrompt }
+    if ($script:LlmBackend -eq 'openai')  { return Invoke-OpenAIRequest -FullPrompt $FullPrompt }
+    $out = ($FullPrompt | & $script:ClaudeExe -p --model $Model) -join "`r`n"
+    if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลว (exit code $LASTEXITCODE)" }
+    if ([string]::IsNullOrWhiteSpace($out)) { throw 'Claude คืนค่าว่างเปล่า' }
+    return $out
+}
+
 function Invoke-ClaudeSummary {
     param($PromptTemplate, $Transcript, $Model)
     $fullPrompt = $PromptTemplate + "`n`n--- ข้อความถอดเสียง ---`n" + $Transcript
-    $summary = ($fullPrompt | & $script:ClaudeExe -p --model $Model) -join "`r`n"
-    if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลว (exit code $LASTEXITCODE)" }
-    if ([string]::IsNullOrWhiteSpace($summary)) { throw 'Claude คืนค่าว่างเปล่า' }
-    return $summary
+    return Invoke-LLM -FullPrompt $fullPrompt -Model $Model
 }
 
 function Split-IntoChunks {
@@ -358,9 +399,8 @@ function Invoke-ChunkedSummary {
 --- ข้อความถอดเสียง ส่วนที่ $($i + 1) ---
 $($chunks[$i])
 "@
-        $partial = ($chunkPrompt | & $script:ClaudeExe -p --model $Model) -join "`n"
-        if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลวที่ chunk $($i + 1) (exit code $LASTEXITCODE)" }
-        if ([string]::IsNullOrWhiteSpace($partial)) { throw "Claude คืนค่าว่างที่ chunk $($i + 1)" }
+        try { $partial = Invoke-LLM -FullPrompt $chunkPrompt -Model $Model }
+        catch { throw "LLM ล้มเหลวที่ chunk $($i + 1): $($_.Exception.Message)" }
         $partials += "### ส่วนที่ $($i + 1)`n$partial"
     }
     Log '    รวมเป็นสรุปสุดท้าย...'
@@ -374,9 +414,8 @@ $($chunks[$i])
 --- สรุปย่อยจากแต่ละส่วน ---
 $merged
 "@
-    $final = ($finalPrompt | & $script:ClaudeExe -p --model $Model) -join "`r`n"
-    if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลวที่ขั้น merge (exit code $LASTEXITCODE)" }
-    if ([string]::IsNullOrWhiteSpace($final)) { throw 'Claude คืนค่าว่างที่ขั้น merge' }
+    try { $final = Invoke-LLM -FullPrompt $finalPrompt -Model $Model }
+    catch { throw "LLM ล้มเหลวที่ขั้น merge: $($_.Exception.Message)" }
     return $final
 }
 
@@ -558,13 +597,33 @@ try {
 
 Invoke-Cleanup
 
-$ClaudeExe = Find-ClaudeExe
-if (-not $ClaudeExe) {
-    Log 'ERROR: ไม่พบ Claude CLI — หยุดการทำงาน'
-    Send-CompletionToast -Success 0 -Failed 0 -Skipped 0 -Failed_Final 0
+$ClaudeExe = $null
+if ($LlmBackend -eq 'claude') {
+    $ClaudeExe = Find-ClaudeExe
+    if (-not $ClaudeExe) {
+        Log 'ERROR: ไม่พบ Claude CLI — หยุดการทำงาน'
+        Send-CompletionToast -Success 0 -Failed 0 -Skipped 0 -Failed_Final 0
+        exit 1
+    }
+    Log "Claude CLI: $ClaudeExe"
+} elseif ($LlmBackend -eq 'gemini') {
+    if (-not $GeminiApiKey) {
+        Log 'ERROR: llm_backend = gemini แต่ gemini_api_key ว่างใน config'
+        Send-CompletionToast -Success 0 -Failed 0 -Skipped 0 -Failed_Final 0
+        exit 1
+    }
+    Log "LLM backend: Gemini ($GeminiModel)"
+} elseif ($LlmBackend -eq 'openai') {
+    if (-not $OpenAIApiKey) {
+        Log 'ERROR: llm_backend = openai แต่ openai_api_key ว่างใน config'
+        Send-CompletionToast -Success 0 -Failed 0 -Skipped 0 -Failed_Final 0
+        exit 1
+    }
+    Log "LLM backend: OpenAI ($OpenAIModel via $OpenAIBaseUrl)"
+} else {
+    Log "ERROR: llm_backend '$LlmBackend' ไม่รู้จัก (รองรับ: claude, gemini, openai)"
     exit 1
 }
-Log "Claude CLI: $ClaudeExe"
 
 # clean .tmp ค้าง
 Get-ChildItem $TranscriptDir -Filter '*.tmp' -ErrorAction SilentlyContinue | ForEach-Object {
@@ -655,12 +714,17 @@ foreach ($video in $videos) {
         $durationSec = if ($meta -and $meta.duration_seconds) { [double]$meta.duration_seconds } else { 0 }
         $configModel = if ($videoCfg.ContainsKey('model')) { [string]$videoCfg['model'] } else { $null }
         $modelToUse = Select-Model -DurationSeconds $durationSec -ConfigModel $configModel
+        $summarizerLabel = switch ($LlmBackend) {
+            'gemini' { "gemini/$GeminiModel" }
+            'openai' { "openai/$OpenAIModel" }
+            default  { $modelToUse }
+        }
         $promptTpl = Select-Prompt -VideoCfg $videoCfg
 
         $est = Get-EstimatedTokens $transcript
-        Log ("  transcript: {0:N0} chars (~{1:N0} tokens), model: {2}" -f $transcript.Length, $est, $modelToUse)
+        Log ("  transcript: {0:N0} chars (~{1:N0} tokens), model: {2}" -f $transcript.Length, $est, $summarizerLabel)
 
-        Log '  ส่งให้ Claude สรุปเป็นภาษาไทย...'
+        Log '  ส่งให้ LLM สรุปเป็นภาษาไทย...'
         if ($transcript.Length -gt $ChunkThresholdChars) {
             $summary = Invoke-ChunkedSummary -PromptTemplate $promptTpl -Transcript $transcript `
                 -TranscriptMdPath $transcriptMd -Model $modelToUse
@@ -677,7 +741,7 @@ foreach ($video in $videos) {
         $transcriptLink = if ($hasTranscriptMd) { "> 📝 Full transcript: [[$name.transcript]]`r`n`r`n" } else { '' }
 
         $frontmatter = Build-Frontmatter -Video $video -Meta $meta `
-            -Title $extracted.Title -ExtraTags $extracted.Tags -Model $modelToUse
+            -Title $extracted.Title -ExtraTags $extracted.Tags -Model $summarizerLabel
         $fullContent = $frontmatter + $transcriptLink + $body + "`r`n"
 
         # local (canonical)

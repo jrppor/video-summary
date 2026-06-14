@@ -5,7 +5,15 @@
   "_comment_python": "path ของ python.exe (ถ้าใส่ 'python' เฉย ๆ จะใช้ตัวที่อยู่ใน PATH)",
   "python_exe": "python",
 
-  "_comment_model": "model default (ใช้ตอน enable_model_tier = false หรือไม่มี duration)",
+  "_comment_llm": "backend สำหรับสรุป: 'claude' (ใช้ Claude CLI) หรือ 'gemini' (ใช้ Gemini REST API ฟรี)",
+  "llm_backend": "claude",
+  "gemini_api_key": "",
+  "gemini_model": "gemini-2.0-flash",
+  "openai_api_key": "",
+  "openai_model": "gpt-4o-mini",
+  "openai_base_url": "https://api.openai.com/v1",
+
+  "_comment_model": "model default สำหรับ Claude (ใช้ตอน enable_model_tier = false หรือไม่มี duration)",
   "claude_model": "sonnet",
 
   "_comment_tier": "ถ้า true จะเลือก model ตามความยาว: <short_sec ใช้ short, >long_sec ใช้ long, อื่น ๆ ใช้ medium",

@@ -14,7 +14,6 @@ param(
     [Parameter(Mandatory, Position = 0)]
     [string]$Name,
 
-    [ValidateSet('haiku', 'sonnet', 'opus')]
     [string]$Model,
 
     [ValidateSet('default', 'lecture', 'meeting')]
@@ -64,6 +63,13 @@ $ChunkSizeChars      = [int](Get-Cfg 'chunk_size_chars' 200000)
 $Outputs = @()
 $rawOutputs = Get-Cfg 'outputs' @()
 if ($rawOutputs) { $Outputs = @($rawOutputs) }
+
+$LlmBackend   = [string](Get-Cfg 'llm_backend' 'claude')
+$GeminiApiKey = [string](Get-Cfg 'gemini_api_key' '')
+$GeminiModel  = [string](Get-Cfg 'gemini_model' 'gemini-2.0-flash')
+$OpenAIApiKey = [string](Get-Cfg 'openai_api_key' '')
+$OpenAIModel  = [string](Get-Cfg 'openai_model' 'gpt-4o-mini')
+$OpenAIBaseUrl= [string](Get-Cfg 'openai_base_url' 'https://api.openai.com/v1')
 
 if (-not $Base) {
     Write-Host "ERROR: config.base ไม่ได้ระบุ" -ForegroundColor Red
@@ -180,29 +186,45 @@ $promptTpl =
 
 $modelToUse = if ($Model) { $Model } else { $DefaultModel }
 
-# ----- find Claude CLI -----
-$candidates = New-Object System.Collections.Generic.List[string]
-$ccRoot = Join-Path $env:APPDATA 'Claude\claude-code'
-if (Test-Path $ccRoot) {
-    Get-ChildItem $ccRoot -Directory -ErrorAction SilentlyContinue |
-        Sort-Object { try { [version]$_.Name } catch { [version]'0.0.0' } } -Descending |
-        ForEach-Object { $candidates.Add((Join-Path $_.FullName 'claude.exe')) }
-}
-foreach ($extRoot in @(
-        (Join-Path $env:USERPROFILE '.vscode\extensions'),
-        (Join-Path $env:USERPROFILE '.vscode-insiders\extensions'),
-        (Join-Path $env:USERPROFILE '.cursor\extensions'))) {
-    if (Test-Path $extRoot) {
-        Get-ChildItem $extRoot -Directory -Filter 'anthropic.claude-code-*' -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { $candidates.Add((Join-Path $_.FullName 'resources\native-binary\claude.exe')) }
+# ----- find LLM backend -----
+$ClaudeExe = $null
+if ($LlmBackend -eq 'claude') {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $ccRoot = Join-Path $env:APPDATA 'Claude\claude-code'
+    if (Test-Path $ccRoot) {
+        Get-ChildItem $ccRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object { try { [version]$_.Name } catch { [version]'0.0.0' } } -Descending |
+            ForEach-Object { $candidates.Add((Join-Path $_.FullName 'claude.exe')) }
     }
-}
-$cmd = Get-Command claude -ErrorAction SilentlyContinue
-if ($cmd) { $candidates.Add($cmd.Source) }
-$ClaudeExe = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-if (-not $ClaudeExe) {
-    Write-Host 'ERROR: ไม่พบ Claude CLI' -ForegroundColor Red
+    foreach ($extRoot in @(
+            (Join-Path $env:USERPROFILE '.vscode\extensions'),
+            (Join-Path $env:USERPROFILE '.vscode-insiders\extensions'),
+            (Join-Path $env:USERPROFILE '.cursor\extensions'))) {
+        if (Test-Path $extRoot) {
+            Get-ChildItem $extRoot -Directory -Filter 'anthropic.claude-code-*' -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { $candidates.Add((Join-Path $_.FullName 'resources\native-binary\claude.exe')) }
+        }
+    }
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates.Add($cmd.Source) }
+    $ClaudeExe = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if (-not $ClaudeExe) {
+        Write-Host 'ERROR: ไม่พบ Claude CLI' -ForegroundColor Red
+        exit 1
+    }
+} elseif ($LlmBackend -eq 'gemini') {
+    if (-not $GeminiApiKey) {
+        Write-Host 'ERROR: llm_backend = gemini แต่ gemini_api_key ว่างใน config' -ForegroundColor Red
+        exit 1
+    }
+} elseif ($LlmBackend -eq 'openai') {
+    if (-not $OpenAIApiKey) {
+        Write-Host 'ERROR: llm_backend = openai แต่ openai_api_key ว่างใน config' -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "ERROR: llm_backend '$LlmBackend' ไม่รู้จัก (รองรับ: claude, gemini, openai)" -ForegroundColor Red
     exit 1
 }
 
@@ -230,7 +252,33 @@ function Split-IntoChunks($PlainText, $TranscriptMdPath) {
     return $chunks
 }
 
-function Invoke-ClaudeOnce($p, $m) {
+function Invoke-GeminiRequest([string]$FullPrompt) {
+    $body = @{
+        contents = @(@{ parts = @(@{ text = $FullPrompt }) })
+    } | ConvertTo-Json -Depth 10 -Compress
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/${GeminiModel}:generateContent?key=${GeminiApiKey}"
+    $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body -ContentType 'application/json; charset=utf-8'
+    $text = $resp.candidates[0].content.parts[0].text
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'Gemini คืนค่าว่างเปล่า' }
+    return $text
+}
+
+function Invoke-OpenAIRequest([string]$FullPrompt) {
+    if (-not $OpenAIApiKey) { throw 'openai_api_key ไม่ได้ตั้งใน config' }
+    $body = @{
+        model    = $OpenAIModel
+        messages = @(@{ role = 'user'; content = $FullPrompt })
+    } | ConvertTo-Json -Depth 5 -Compress
+    $headers = @{ Authorization = "Bearer $OpenAIApiKey" }
+    $resp = Invoke-RestMethod -Uri "$OpenAIBaseUrl/chat/completions" -Method POST -Body $body -ContentType 'application/json; charset=utf-8' -Headers $headers
+    $text = $resp.choices[0].message.content
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'OpenAI คืนค่าว่างเปล่า' }
+    return $text
+}
+
+function Invoke-LLM([string]$p, [string]$m) {
+    if ($LlmBackend -eq 'gemini') { return Invoke-GeminiRequest $p }
+    if ($LlmBackend -eq 'openai')  { return Invoke-OpenAIRequest $p }
     $out = ($p | & $ClaudeExe -p --model $m) -join "`r`n"
     if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลว (exit code $LASTEXITCODE)" }
     if ([string]::IsNullOrWhiteSpace($out)) { throw 'Claude คืนค่าว่างเปล่า' }
@@ -256,7 +304,7 @@ if ($transcript.Length -gt $ChunkThresholdChars) {
 --- ข้อความถอดเสียง ส่วนที่ $($i + 1) ---
 $($chunks[$i])
 "@
-        $partials += "### ส่วนที่ $($i + 1)`n" + (Invoke-ClaudeOnce $chunkPrompt $modelToUse)
+        $partials += "### ส่วนที่ $($i + 1)`n" + (Invoke-LLM $chunkPrompt $modelToUse)
     }
     Write-Host '  รวมเป็นสรุปสุดท้าย...'
     $merged = $partials -join "`n`n"
@@ -269,11 +317,11 @@ $($chunks[$i])
 --- สรุปย่อยจากแต่ละส่วน ---
 $merged
 "@
-    $summary = Invoke-ClaudeOnce $finalPrompt $modelToUse
+    $summary = Invoke-LLM $finalPrompt $modelToUse
 } else {
-    Write-Host 'ส่งให้ Claude สรุป...'
+    Write-Host 'ส่งให้ LLM สรุป...'
     $fullPrompt = $promptTpl + "`n`n--- ข้อความถอดเสียง ---`n" + $transcript
-    $summary = Invoke-ClaudeOnce $fullPrompt $modelToUse
+    $summary = Invoke-LLM $fullPrompt $modelToUse
 }
 
 # ----- extract title + tags -----
@@ -304,7 +352,12 @@ $fmLines += "source: `"$sourceEscaped`""
 if ($meta -and $meta.duration_hms) { $fmLines += "duration: `"$($meta.duration_hms)`"" }
 if ($meta -and $meta.language)     { $fmLines += "language: $($meta.language)" }
 if ($meta -and $meta.model)        { $fmLines += "whisper_model: $($meta.model)" }
-$fmLines += "summarizer: $modelToUse"
+$summarizerLabel = switch ($LlmBackend) {
+    'gemini' { "gemini/$GeminiModel" }
+    'openai' { "openai/$OpenAIModel" }
+    default  { $modelToUse }
+}
+$fmLines += "summarizer: $summarizerLabel"
 if ($title) {
     $titleEscaped = $title -replace '"', '\"'
     $fmLines += "aliases: [`"$titleEscaped`"]"
