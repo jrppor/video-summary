@@ -1,0 +1,33 @@
+# user-specific config — ก๊อปจาก config.example.json แล้วแก้
+config.json
+
+# user data folders (kept outside repo via config.base, but ignore here too just in case)
+inbox/
+summaries/
+transcripts/
+done/
+failed/
+logs/
+state/
+
+# logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# editors
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PowerShell module cache
+PSScriptAnalyzerSettings.psd1

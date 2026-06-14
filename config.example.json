@@ -1,0 +1,62 @@
+{
+  "_comment_base": "โฟลเดอร์เก็บข้อมูล (inbox/summaries/transcripts/done/failed/logs/state) — จะถูกสร้างให้อัตโนมัติถ้ายังไม่มี",
+  "base": "C:\\Users\\YOURNAME\\VideoSummary",
+
+  "_comment_python": "path ของ python.exe (ถ้าใส่ 'python' เฉย ๆ จะใช้ตัวที่อยู่ใน PATH)",
+  "python_exe": "python",
+
+  "_comment_model": "model default (ใช้ตอน enable_model_tier = false หรือไม่มี duration)",
+  "claude_model": "sonnet",
+
+  "_comment_tier": "ถ้า true จะเลือก model ตามความยาว: <short_sec ใช้ short, >long_sec ใช้ long, อื่น ๆ ใช้ medium",
+  "enable_model_tier": true,
+  "model_tier": {
+    "short_sec": 300,
+    "long_sec": 3600,
+    "short":  "haiku",
+    "medium": "sonnet",
+    "long":   "opus"
+  },
+
+  "_comment_outputs": "นอกเหนือจาก base\\summaries\\ จะเซฟ summary ลง path เหล่านี้ด้วย — copy_transcript = true จะก๊อป .transcript.md ตามไปด้วย (เหมาะกับ Obsidian)",
+  "outputs": [
+    {
+      "path": "C:\\path\\Video Summaries",
+      "copy_transcript": true
+    }
+  ],
+
+  "_comment_retention": "ลบไฟล์เก่าใน done\\ และ logs\\ อัตโนมัติ",
+  "retention": {
+    "done_days": 60,
+    "logs_days": 30
+  },
+
+  "_comment_retry": "ไฟล์ที่ล้มเหลวเกินจำนวนนี้จะย้ายไป failed\\",
+  "retry": {
+    "max_failed_attempts": 3
+  },
+
+  "_comment_busy_check": "ถ้าเครื่องกำลังทำงานหนัก จะข้ามรอบนี้ (กันแย่งทรัพยากร)",
+  "busy_check": {
+    "enable": true,
+    "max_gpu_util_percent": 40,
+    "max_gpu_mem_mb":       4096,
+    "max_cpu_percent":      70
+  },
+
+  "_comment_chunking": "transcript เกิน chunk_threshold_chars จะใช้ map-reduce แบ่งเป็น chunk ละ chunk_size_chars",
+  "chunk_threshold_chars": 600000,
+  "chunk_size_chars":      200000,
+
+  "_comment_grace": "ไฟล์ที่ถูกแก้ไขภายใน N วินาทีล่าสุดจะถูกข้าม (กันไฟล์ที่ยังเขียนอยู่)",
+  "file_in_use_grace_sec": 60,
+
+  "enable_toast": true,
+
+  "_comment_extensions": "นามสกุลไฟล์ที่รับใน inbox\\",
+  "media_extensions": {
+    "video": [".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".wmv"],
+    "audio": [".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"]
+  }
+}
