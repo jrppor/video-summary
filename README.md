@@ -147,6 +147,32 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 .\resummarize.ps1 "Recording 2026-06-13 215814" -Prompt "สรุปสั้น 3 ประโยค"
 ```
 
+## เปลี่ยน LLM Backend
+
+แก้ `config.json` แค่ 1-2 บรรทัด ไม่ต้องแตะโค้ด:
+
+**Claude** (default — ใช้ Claude CLI + subscription):
+```json
+"llm_backend": "claude",
+"claude_model": "sonnet"
+```
+
+**Gemini** (ฟรี — ต้องมี API key จาก [aistudio.google.com/apikey](https://aistudio.google.com/apikey)):
+```json
+"llm_backend": "gemini",
+"gemini_api_key": "AIza...",
+"gemini_model": "gemini-2.0-flash"
+```
+
+**OpenAI** (ใช้ API key จาก [platform.openai.com](https://platform.openai.com)):
+```json
+"llm_backend": "openai",
+"openai_api_key": "sk-...",
+"openai_model": "gpt-4o-mini"
+```
+
+> `openai_base_url` เปลี่ยนได้ — รองรับ provider ที่ใช้ OpenAI format เช่น Groq (`https://api.groq.com/openai/v1`)
+
 ## Configuration Reference
 
 ดู [`config.example.json`](config.example.json) — comments อธิบายทุก key
@@ -155,8 +181,14 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 |---|---|---|
 | `base` | (required) | โฟลเดอร์เก็บ data |
 | `python_exe` | `"python"` | path ของ python.exe |
-| `claude_model` | `"sonnet"` | model default |
-| `enable_model_tier` | `true` | เลือก model จาก duration |
+| `llm_backend` | `"claude"` | backend สรุป: `claude` / `gemini` / `openai` |
+| `gemini_api_key` | `""` | API key สำหรับ Gemini |
+| `gemini_model` | `"gemini-2.0-flash"` | Gemini model |
+| `openai_api_key` | `""` | API key สำหรับ OpenAI |
+| `openai_model` | `"gpt-4o-mini"` | OpenAI model |
+| `openai_base_url` | `"https://api.openai.com/v1"` | endpoint (เปลี่ยนเพื่อใช้ Groq ฯลฯ) |
+| `claude_model` | `"sonnet"` | Claude model (ใช้ตอน backend = claude) |
+| `enable_model_tier` | `true` | เลือก Claude model จาก duration อัตโนมัติ |
 | `outputs` | `[]` | array ของ output destinations |
 | `retention.done_days` | `60` | ลบไฟล์ใน done\ เก่ากว่า |
 | `retention.logs_days` | `30` | ลบ log เก่ากว่า |
