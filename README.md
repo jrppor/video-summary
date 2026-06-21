@@ -161,7 +161,7 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 ```json
 "llm_backend": "gemini",
 "gemini_api_key": "AIza...",
-"gemini_model": "gemini-2.0-flash"
+"gemini_model": "gemini-2.5-flash"
 ```
 
 **OpenAI** (ใช้ API key จาก [platform.openai.com](https://platform.openai.com)):
@@ -183,7 +183,7 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 | `python_exe` | `"python"` | path ของ python.exe |
 | `llm_backend` | `"claude"` | backend สรุป: `claude` / `gemini` / `openai` |
 | `gemini_api_key` | `""` | API key สำหรับ Gemini |
-| `gemini_model` | `"gemini-2.0-flash"` | Gemini model |
+| `gemini_model` | `"gemini-2.5-flash"` | Gemini model |
 | `openai_api_key` | `""` | API key สำหรับ OpenAI |
 | `openai_model` | `"gpt-4o-mini"` | OpenAI model |
 | `openai_base_url` | `"https://api.openai.com/v1"` | endpoint (เปลี่ยนเพื่อใช้ Groq ฯลฯ) |

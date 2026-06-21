@@ -8,7 +8,7 @@
   "_comment_llm": "backend สำหรับสรุป: 'claude' (ใช้ Claude CLI) หรือ 'gemini' (ใช้ Gemini REST API ฟรี)",
   "llm_backend": "claude",
   "gemini_api_key": "",
-  "gemini_model": "gemini-2.0-flash",
+  "gemini_model": "gemini-2.5-flash",
   "openai_api_key": "",
   "openai_model": "gpt-4o-mini",
   "openai_base_url": "https://api.openai.com/v1",

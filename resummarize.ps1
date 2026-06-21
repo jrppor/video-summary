@@ -66,7 +66,7 @@ if ($rawOutputs) { $Outputs = @($rawOutputs) }
 
 $LlmBackend   = [string](Get-Cfg 'llm_backend' 'claude')
 $GeminiApiKey = [string](Get-Cfg 'gemini_api_key' '')
-$GeminiModel  = [string](Get-Cfg 'gemini_model' 'gemini-2.0-flash')
+$GeminiModel  = [string](Get-Cfg 'gemini_model' 'gemini-2.5-flash')
 $OpenAIApiKey = [string](Get-Cfg 'openai_api_key' '')
 $OpenAIModel  = [string](Get-Cfg 'openai_model' 'gpt-4o-mini')
 $OpenAIBaseUrl= [string](Get-Cfg 'openai_base_url' 'https://api.openai.com/v1')
@@ -252,12 +252,41 @@ function Split-IntoChunks($PlainText, $TranscriptMdPath) {
     return $chunks
 }
 
+function Invoke-JsonPost([string]$Url, [string]$Body, [hashtable]$Headers = @{}, [int]$MaxRetry = 3) {
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            return Invoke-RestMethod -Uri $Url -Method POST -Body $Body `
+                -ContentType 'application/json; charset=utf-8' -Headers $Headers
+        } catch {
+            $code = $null; $bodyText = $null
+            $r = $_.Exception.Response
+            if ($r) {
+                try { $code = [int]$r.StatusCode } catch { }
+                try {
+                    $reader = New-Object System.IO.StreamReader($r.GetResponseStream())
+                    $bodyText = $reader.ReadToEnd()
+                } catch { }
+            }
+            if (($code -eq 429 -or $code -eq 503) -and $attempt -lt $MaxRetry) {
+                $wait = [int]([Math]::Pow(2, $attempt) * 10)
+                Write-Host "  rate limit ($code) — รอ $wait วินาที (รอบ $attempt/$MaxRetry)" -ForegroundColor Yellow
+                Start-Sleep -Seconds $wait
+                continue
+            }
+            $detail = if ($bodyText) { $bodyText.Trim() } else { $_.Exception.Message }
+            throw "HTTP $code - $detail"
+        }
+    }
+}
+
 function Invoke-GeminiRequest([string]$FullPrompt) {
     $body = @{
         contents = @(@{ parts = @(@{ text = $FullPrompt }) })
     } | ConvertTo-Json -Depth 10 -Compress
     $url = "https://generativelanguage.googleapis.com/v1beta/models/${GeminiModel}:generateContent?key=${GeminiApiKey}"
-    $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body -ContentType 'application/json; charset=utf-8'
+    $resp = Invoke-JsonPost $url $body
     $text = $resp.candidates[0].content.parts[0].text
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'Gemini คืนค่าว่างเปล่า' }
     return $text
@@ -270,7 +299,7 @@ function Invoke-OpenAIRequest([string]$FullPrompt) {
         messages = @(@{ role = 'user'; content = $FullPrompt })
     } | ConvertTo-Json -Depth 5 -Compress
     $headers = @{ Authorization = "Bearer $OpenAIApiKey" }
-    $resp = Invoke-RestMethod -Uri "$OpenAIBaseUrl/chat/completions" -Method POST -Body $body -ContentType 'application/json; charset=utf-8' -Headers $headers
+    $resp = Invoke-JsonPost "$OpenAIBaseUrl/chat/completions" $body $headers
     $text = $resp.choices[0].message.content
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'OpenAI คืนค่าว่างเปล่า' }
     return $text
@@ -279,15 +308,29 @@ function Invoke-OpenAIRequest([string]$FullPrompt) {
 function Invoke-LLM([string]$p, [string]$m) {
     if ($LlmBackend -eq 'gemini') { return Invoke-GeminiRequest $p }
     if ($LlmBackend -eq 'openai')  { return Invoke-OpenAIRequest $p }
-    $out = ($p | & $ClaudeExe -p --model $m) -join "`r`n"
-    if ($LASTEXITCODE -ne 0) { throw "Claude ล้มเหลว (exit code $LASTEXITCODE)" }
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $out = ($p | & $ClaudeExe -p --model $m 2>$tmpErr) -join "`r`n"
+        $errText = (Get-Content $tmpErr -Raw -Encoding utf8 -ErrorAction SilentlyContinue)
+    } finally {
+        Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+    if ($LASTEXITCODE -ne 0) {
+        $detail = if ($errText) { $errText.Trim() } else { "exit code $LASTEXITCODE" }
+        throw "Claude ล้มเหลว: $detail"
+    }
     if ([string]::IsNullOrWhiteSpace($out)) { throw 'Claude คืนค่าว่างเปล่า' }
     return $out
 }
 
-# ----- call Claude -----
+# ----- call LLM -----
+$displayModel = switch ($LlmBackend) {
+    'gemini' { "gemini/$GeminiModel" }
+    'openai' { "openai/$OpenAIModel" }
+    default  { $modelToUse }
+}
 Write-Host "transcript: $($transcript.Length) chars (~$([int]($transcript.Length / 4)) tokens)"
-Write-Host "model: $modelToUse"
+Write-Host "backend: $LlmBackend | model: $displayModel"
 
 if ($transcript.Length -gt $ChunkThresholdChars) {
     $chunks = Split-IntoChunks $transcript $mdPath
@@ -329,6 +372,17 @@ $title = $null; $tags = @()
 if ($summary -match '(?m)^##\s*หัวข้อเรื่อง\s*\r?\n+\s*(.+?)\s*\r?\n') {
     $title = $Matches[1].Trim() -replace '^\*+|\*+$', ''
 }
+if (-not $title) {
+    $sectionLabels = 'ภาพรวม|ประเด็นสำคัญ|ข้อสรุป|แท็ก|คำศัพท์|ตัวอย่าง|สิ่งที่ควร|วาระ|ข้อตัดสินใจ|Action|คำถาม'
+    foreach ($line in ($summary -split "\r?\n")) {
+        if ($line -match '^##\s*(.+?)\s*$') {
+            $h = $Matches[1].Trim() -replace '^\*+|\*+$', ''
+            if ($h -and $h -notmatch '^หัวข้อเรื่อง' -and $h -notmatch "^($sectionLabels)") {
+                $title = $h; break
+            }
+        }
+    }
+}
 if ($summary -match '(?ms)^##\s*แท็ก\s*\r?\n+(.+?)(\r?\n##|\r?\n*$)') {
     $tagLine = $Matches[1].Trim()
     $rawTags = $tagLine -split '[,\n]' | ForEach-Object { ($_ -replace '^[\s\-\*•#]+', '').Trim() }
@@ -364,7 +418,7 @@ if ($title) {
 }
 $allTags = @('video-summary')
 foreach ($t in $tags) {
-    $slug = $t -replace '\s+', '-' -replace '[^\p{L}\p{N}\-_/]', ''
+    $slug = $t -replace '\s+', '-' -replace '[^\p{L}\p{M}\p{N}\-_/]', ''
     if ($slug -and $slug.Length -gt 1) { $allTags += $slug.ToLower() }
 }
 $allTags = $allTags | Select-Object -Unique
