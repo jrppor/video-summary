@@ -11,14 +11,15 @@
 - 🧠 ใช้ **faster-whisper large-v3** (GPU CUDA) — เร็วประมาณ 6× realtime บน RTX 3070
 - 📝 สรุปด้วย **Claude CLI** (sonnet/opus/haiku) — ใช้ subscription quota ของผู้ใช้ ไม่มีค่า API แยก
 - 🎯 **เลือก model ตามความยาว** อัตโนมัติ (haiku/sonnet/opus)
-- 📄 **Map-reduce** สำหรับ transcript ยาว (>150k tokens) — แบ่งสรุปทีละส่วนแล้ว merge
+- ⏱️ **สรุปพร้อมจุดเวลา** — ป้อน transcript ฉบับมี timestamp ให้ LLM แล้วสรุปแนบเวลาอ้างอิง `[HH:MM:SS]` ท้ายประเด็นสำคัญ กดกลับไปดูช่วงนั้นได้
+- 📄 **Map-reduce** สำหรับ transcript ยาว — แบ่งสรุปทีละส่วนแล้ว merge (เกณฑ์ภาษาไทยหดลงครึ่งหนึ่งอัตโนมัติ เพราะไทยกินโทเคนแน่นกว่าอังกฤษ ~2 เท่า)
 - 🏷️ **Smart title + auto-tags** — Claude เสนอชื่อเรื่อง + tag เอง ใส่ใน YAML frontmatter (Obsidian alias/graph)
 - 📂 **Multiple output destinations** — เซฟ summary ไปหลาย path พร้อมกัน (local + Obsidian vault + Dropbox + …)
 - 🎛️ **Per-video config sidecar** — override model/prompt mode ต่อไฟล์ผ่าน `<name>.config.json`
 - 🛡️ **Retry budget + failed folder** — ไฟล์ที่ล้มเหลวเกินจำนวนถูกย้ายไป `failed\` พร้อมเหตุผล
 - 🧹 **Auto-cleanup** — done >60 วัน + logs >30 วัน ลบอัตโนมัติ
-- 🚦 **Busy-check** — ถ้าเครื่องทำงานหนัก (GPU/CPU/VRAM เกิน threshold) ข้ามรอบ ไม่แย่งทรัพยากร
-- 🔔 **Toast notification** เมื่อจบรอบ (BurntToast)
+- 🚦 **Busy-check ฉลาดขึ้น** — เช็คภาระเครื่องเฉพาะขั้นถอดเสียง (ขั้นสรุปผ่าน API ไม่ถูกเลื่อน) ถ้าเครื่องหนักจะเลื่อน + ส่ง toast แจ้ง เลื่อนครบ `max_deferrals` รอบแล้วรันเลยแบบลดความสำคัญโปรเซส — ไม่มีทางค้างข้ามสัปดาห์
+- 🔔 **Toast notification** เมื่อจบรอบและเมื่อเลื่อนรอบ (BurntToast)
 
 ## Prerequisites
 
@@ -61,6 +62,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\summarize-videos.ps1
 
 หย่อนไฟล์ลง `<base>\inbox\` แล้วรันคำสั่งข้างบนอีกครั้ง
 
+รันมือแล้วอยากให้ทำเลยไม่ต้องรอเครื่องว่าง — ใส่ `-Force` (ข้าม busy-check):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\summarize-videos.ps1 -Force
+```
+
 ## Scheduling (Optional)
 
 รันทุกเสาร์-อาทิตย์ 22:30 retry ทุกชั่วโมงถึง 06:30:
@@ -76,6 +83,18 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances 
 
 Register-ScheduledTask -TaskName 'VideoSummary-Weekend' `
     -Action $action -Trigger $trigger -Settings $settings -Description 'Auto video summarization'
+```
+
+แนะนำเพิ่มรอบเก็บตกรายวัน — กันไฟล์ค้างข้ามสัปดาห์ถ้าพลาดหน้าต่างสุดสัปดาห์ (จบใน 1 วินาทีถ้า inbox ว่าง):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Coding\VideoSummary\summarize-videos.ps1"'
+$trigger = New-ScheduledTaskTrigger -Daily -At 01:00
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+
+Register-ScheduledTask -TaskName 'VideoSummary-DailyCatchup' `
+    -Action $action -Trigger $trigger -Settings $settings -Description 'VideoSummary daily catch-up'
 ```
 
 ## Output
@@ -147,6 +166,8 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 .\resummarize.ps1 "Recording 2026-06-13 215814" -Prompt "สรุปสั้น 3 ประโยค"
 ```
 
+ถ้าไม่ระบุ `-Model` จะเลือกตามความยาววิดีโอ (model tier) เหมือนสคริปต์หลัก
+
 ## เปลี่ยน LLM Backend
 
 แก้ `config.json` แค่ 1-2 บรรทัด ไม่ต้องแตะโค้ด:
@@ -193,8 +214,10 @@ Mode ที่มีให้: `default`, `lecture`, `meeting`
 | `retention.done_days` | `60` | ลบไฟล์ใน done\ เก่ากว่า |
 | `retention.logs_days` | `30` | ลบ log เก่ากว่า |
 | `retry.max_failed_attempts` | `3` | ล้มเหลวเกินนี้ย้าย failed\ |
-| `busy_check.*` | — | thresholds GPU/CPU/VRAM |
-| `chunk_threshold_chars` | `600000` | transcript ใหญ่กว่านี้ใช้ map-reduce |
+| `busy_check.*` | — | thresholds GPU/CPU/VRAM (เช็คเฉพาะขั้นถอดเสียง) |
+| `busy_check.max_deferrals` | `3` | เลื่อนเกินนี้แล้วรันเลยแบบลดความสำคัญโปรเซส |
+| `chunk_threshold_chars` | `600000` | transcript ใหญ่กว่านี้ใช้ map-reduce (ภาษาไทยหดเหลือครึ่ง) |
+| `summary_timestamps` | `true` | สรุปแนบเวลาอ้างอิง [HH:MM:SS] ท้ายประเด็นสำคัญ |
 | `file_in_use_grace_sec` | `60` | ข้ามไฟล์ที่ถูกแก้ภายใน N วินาที |
 
 config สามารถระบุที่อยู่ได้ 3 ทาง (ลำดับ priority):
@@ -209,14 +232,16 @@ config สามารถระบุที่อยู่ได้ 3 ทาง 
 - `DEVICE` — `cuda` / `cpu`
 - `COMPUTE_TYPE` — `float16` / `int8_float16` (เร็วขึ้น 30%) / `int8`
 - `USE_VAD` — ข้ามช่วงเงียบ
+- `CONDITION_ON_PREV` — `False` (default) กันอาการหลอนวนซ้ำประโยคเดิมในไฟล์ยาว
 - `PARAGRAPH_GAP_SEC` — เงียบกี่วินาทีตัด paragraph ใน transcript.md
 
 ## Folder Layout
 
 ```
 C:\Coding\VideoSummary\        # repo (code)
-  ├─ summarize-videos.ps1
-  ├─ resummarize.ps1
+  ├─ summarize-videos.ps1     # pipeline หลัก (inbox -> ถอดเสียง -> สรุป)
+  ├─ resummarize.ps1          # สรุปใหม่จาก transcript เดิม
+  ├─ VideoSummary.Common.ps1  # โค้ดกลาง: config/prompt/LLM/chunking/frontmatter
   ├─ transcribe.py
   ├─ config.example.json      # template (committed)
   ├─ config.json              # ของคุณ (gitignored)

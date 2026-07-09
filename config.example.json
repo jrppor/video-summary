@@ -45,17 +45,21 @@
     "max_failed_attempts": 3
   },
 
-  "_comment_busy_check": "ถ้าเครื่องกำลังทำงานหนัก จะข้ามรอบนี้ (กันแย่งทรัพยากร)",
+  "_comment_busy_check": "ถ้าเครื่องกำลังทำงานหนัก จะเลื่อนขั้นถอดเสียงออกไป (กันแย่งทรัพยากร) — เลื่อนครบ max_deferrals รอบแล้วจะรันเลยแบบลดความสำคัญโปรเซส (ขั้นสรุปผ่าน API ไม่ถูกเลื่อน เพราะไม่กินเครื่อง)",
   "busy_check": {
     "enable": true,
     "max_gpu_util_percent": 40,
     "max_gpu_mem_mb":       4096,
-    "max_cpu_percent":      70
+    "max_cpu_percent":      70,
+    "max_deferrals":        3
   },
 
-  "_comment_chunking": "transcript เกิน chunk_threshold_chars จะใช้ map-reduce แบ่งเป็น chunk ละ chunk_size_chars",
+  "_comment_chunking": "transcript เกิน chunk_threshold_chars จะใช้ map-reduce แบ่งเป็น chunk ละ chunk_size_chars (ภาษาไทยเกณฑ์ถูกหดลงครึ่งหนึ่งอัตโนมัติ เพราะไทยกินโทเคนแน่นกว่าอังกฤษ ~2 เท่า)",
   "chunk_threshold_chars": 600000,
   "chunk_size_chars":      200000,
+
+  "_comment_timestamps": "true = ป้อน transcript ฉบับมีจุดเวลาให้ LLM แล้วให้สรุปแนบเวลาอ้างอิง [HH:MM:SS] ท้ายประเด็นสำคัญ",
+  "summary_timestamps": true,
 
   "_comment_grace": "ไฟล์ที่ถูกแก้ไขภายใน N วินาทีล่าสุดจะถูกข้าม (กันไฟล์ที่ยังเขียนอยู่)",
   "file_in_use_grace_sec": 60,
